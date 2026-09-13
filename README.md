@@ -104,6 +104,10 @@ $ python timetravel.py ... shop.orders 6aa5da2d7307e9debdcbc0ce field status
 3. Keep one state per entry. `at` picks the last state whose `wall` is not after the
    instant. `diff` flattens two states into dotted paths and compares.
 
+CI runs the unit tests and then `demo.py` against MongoDB 6.0, 7.0 and 8.0 as a
+one-node replica set; the demo asserts every reconstruction, so a wrong replay fails
+the build.
+
 Every state is a deep copy, so replaying a `$push` never rewrites the state recorded
 before it. That one was a real bug during development.
 

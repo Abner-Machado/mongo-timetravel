@@ -62,3 +62,20 @@ run("at", stamp("paid"))
 run("diff", stamp("filled"), stamp("refunded"))
 run("field", "status")
 run("field", "items.1.sku")
+
+# The same questions, answered in-process and checked. This is what CI runs.
+import timetravel as tt
+
+timeline = tt.Timeline(client, "shop.orders", order_id)
+assert len(timeline.entries) == 8, len(timeline.entries)
+assert [e["op"] for e in timeline.entries] == ["i", "u", "u", "u", "u", "u", "u", "d"]
+
+paid = timeline.at(tt.parse_time(stamp("paid")))
+assert paid["status"] == "paid" and paid["total"] == 35.5 and paid["notes"] == {"gift": True}
+assert [item["sku"] for item in paid["items"]] == ["A1", "B7"] and paid["items"][0]["qty"] == 3
+
+refunded = timeline.at(tt.parse_time(stamp("refunded")))
+assert refunded["status"] == "refunded" and refunded["total"] == 0.0
+assert timeline.at(tt.parse_time(stamp("deleted"))) is None
+assert timeline.entries[4]["txnNumber"] == timeline.entries[5]["txnNumber"], "transaction not flattened"
+print("\nall reconstructions match", flush=True)
