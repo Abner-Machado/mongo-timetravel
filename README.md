@@ -121,6 +121,10 @@ before it. That one was a real bug during development.
 - `wall` is the server's clock. Times you type are read in your local zone unless they
   carry an offset or a `Z`.
 - One `_id` at a time, by design. This is a forensic tool, not a replication tool.
+- The oplog has no index on `_id`, so each question is a scan. Add `--since "2026-09-01"`
+  to any command and the server seeks to that timestamp instead of reading from the
+  start (explain shows `COLLSCAN` with a `minRecord` bound). If the cut lands after
+  the insert, the tool says so and reconstructs from there.
 
 ## Requirements
 

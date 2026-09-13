@@ -15,6 +15,10 @@ Usage:
     timetravel.py URI DB.COLL ID diff  "2026-09-12 10:00" "2026-09-12 11:00"
     timetravel.py URI DB.COLL ID field price
 
+Add --since "2026-09-01" to any command to skip the part of the oplog older than
+that. The oplog has no index on _id, so without it every question scans the whole
+oplog; with it the server seeks straight to that timestamp.
+
 Times are read in your local time zone unless they carry an explicit offset or
 a trailing Z. Only pymongo is required.
 """
@@ -23,19 +27,25 @@ import copy
 import sys
 from datetime import datetime, timezone
 
-from bson import ObjectId, json_util
+from bson import ObjectId, Timestamp, json_util
 from pymongo import MongoClient
 
 # ---------------------------------------------------------------- oplog reading
 
-def oplog_entries(client, ns, doc_id):
-    """Every oplog entry that touched (ns, doc_id), oldest first, transactions flattened."""
+def oplog_entries(client, ns, doc_id, since=None):
+    """Every oplog entry that touched (ns, doc_id), oldest first, transactions flattened.
+
+    `since` is a UTC datetime. A `ts` lower bound lets the server seek into the
+    oplog instead of scanning it from the start.
+    """
     oplog = client["local"]["oplog.rs"]
     touches = {"$or": [{"o._id": doc_id}, {"o2._id": doc_id}]}
     query = {"$or": [
         {"ns": ns, **touches},
         {"op": "c", "o.applyOps": {"$elemMatch": {"ns": ns, **touches}}},
     ]}
+    if since is not None:
+        query["ts"] = {"$gte": Timestamp(int(since.replace(tzinfo=timezone.utc).timestamp()), 0)}
     for entry in oplog.find(query).sort("$natural", 1):
         if entry["op"] == "c":
             for inner in entry["o"]["applyOps"]:
@@ -166,8 +176,8 @@ def _step(target, part, create):
 class Timeline:
     """The document's states, one per oplog entry, oldest first."""
 
-    def __init__(self, client, ns, doc_id):
-        self.entries = list(oplog_entries(client, ns, doc_id))
+    def __init__(self, client, ns, doc_id, since=None):
+        self.entries = list(oplog_entries(client, ns, doc_id, since))
         self.states = []
         doc = None
         self.partial = bool(self.entries) and self.entries[0]["op"] != "i"
@@ -277,10 +287,15 @@ def main(argv):
     if len(argv) < 4:
         print(__doc__)
         return 2
+    since = None
+    if "--since" in argv:
+        at = argv.index("--since")
+        since = parse_time(argv[at + 1])
+        argv = argv[:at] + argv[at + 2:]
     uri, ns, doc_id, command = argv[0], argv[1], parse_id(argv[2]), argv[3]
     args = argv[4:]
     client = MongoClient(uri)
-    timeline = Timeline(client, ns, doc_id)
+    timeline = Timeline(client, ns, doc_id, since)
 
     if not timeline.entries:
         print(f"no write to {ns} {show(doc_id)} in the oplog", end="")
@@ -289,8 +304,9 @@ def main(argv):
         print()
         return 1
     if timeline.partial:
-        print(f"warning: first oplog entry for this document is not its insert; "
-              f"the oplog only goes back to {local(timeline.oplog_start)}. "
+        reason = (f"--since cuts the history at {local(since)}" if since
+                  else f"the oplog only goes back to {local(timeline.oplog_start)}")
+        print(f"warning: first oplog entry for this document is not its insert; {reason}. "
               f"Fields never written since then are missing from the reconstruction.\n")
 
     if command == "history":
