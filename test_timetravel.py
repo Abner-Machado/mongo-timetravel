@@ -78,6 +78,29 @@ class Diff(unittest.TestCase):
         self.assertEqual(tt.diff({"_id": 1}, {"_id": 1}), ["  (no change)"])
 
 
+class Record(unittest.TestCase):
+    def test_json_line_for_update(self):
+        e = entry("u", {"$v": 2, "diff": {"u": {"a": 5}}}, {"_id": 1})
+        e["txnNumber"] = 3
+        rec = tt.record(e, {"_id": 1, "a": 1, "b": 2}, {"_id": 1, "a": 5, "c": 0})
+        self.assertEqual(rec["op"], "update")
+        self.assertEqual(rec["txn"], 3)
+        self.assertIsNone(rec["session"])
+        self.assertEqual(rec["changes"], [
+            {"path": "a", "old": 1, "new": 5},
+            {"path": "b", "old": 2},
+            {"path": "c", "new": 0},
+        ])
+        self.assertNotIn("deleted", rec)
+
+    def test_json_line_for_delete_is_extended_json(self):
+        rec = tt.record(entry("d", {"_id": 1}), {"_id": 1, "a": 1}, None)
+        self.assertTrue(rec["deleted"])
+        line = tt.show(rec)
+        self.assertIn('"$date"', line)
+        self.assertIn('"deleted": true', line)
+
+
 class Ids(unittest.TestCase):
     def test_object_id_int_and_string(self):
         self.assertEqual(str(tt.parse_id("6aa5da2d7307e9debdcbc0ce")), "6aa5da2d7307e9debdcbc0ce")

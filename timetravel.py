@@ -19,6 +19,9 @@ Add --since "2026-09-01" to any command to skip the part of the oplog older than
 that. The oplog has no index on _id, so without it every question scans the whole
 oplog; with it the server seeks straight to that timestamp.
 
+Add --json to `history` or `field` to get one Extended JSON object per line instead
+of the text layout, so the output can go through jq or into another collection.
+
 Times are read in your local time zone unless they carry an explicit offset or
 a trailing Z. Only pymongo is required.
 """
@@ -273,6 +276,29 @@ def local(when):
     return when.replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
+def record(entry, before, after):
+    """One write as a plain dict, for --json: who wrote, when, and every changed path."""
+    session = entry.get("lsid", {}).get("id")
+    out = {
+        "wall": entry["wall"],
+        "op": {"i": "insert", "u": "update", "d": "delete"}.get(entry["op"], entry["op"]),
+        "session": session.hex()[:8] if session is not None else None,
+        "txn": entry.get("txnNumber"),
+        "changes": [],
+    }
+    old, new = flatten(before), flatten(after)
+    for path in sorted(set(old) | set(new)):
+        if path not in old:
+            out["changes"].append({"path": path, "new": new[path]})
+        elif path not in new:
+            out["changes"].append({"path": path, "old": old[path]})
+        elif old[path] != new[path]:
+            out["changes"].append({"path": path, "old": old[path], "new": new[path]})
+    if after is None and before is not None:
+        out["deleted"] = True
+    return out
+
+
 def who(entry):
     session = entry.get("lsid", {}).get("id")
     parts = [{"i": "insert", "u": "update", "d": "delete"}.get(entry["op"], entry["op"])]
@@ -292,6 +318,8 @@ def main(argv):
         at = argv.index("--since")
         since = parse_time(argv[at + 1])
         argv = argv[:at] + argv[at + 2:]
+    as_json = "--json" in argv
+    argv = [a for a in argv if a != "--json"]
     uri, ns, doc_id, command = argv[0], argv[1], parse_id(argv[2]), argv[3]
     args = argv[4:]
     client = MongoClient(uri)
@@ -311,6 +339,9 @@ def main(argv):
 
     if command == "history":
         for entry, before, after in timeline.changes():
+            if as_json:
+                print(show(record(entry, before, after)))
+                continue
             print(f"{local(entry['wall'])}  {who(entry)}")
             print("\n".join(diff(before, after)))
     elif command == "at":
@@ -324,7 +355,13 @@ def main(argv):
         for entry, before, after in timeline.changes():
             value = flatten(after).get(path) if after is not None else None
             if value != previous or entry["op"] in ("i", "d"):
-                print(f"{local(entry['wall'])}  {who(entry)}  {path} = {show(value)}")
+                if as_json:
+                    line = record(entry, None, None)
+                    del line["changes"]
+                    line.update({"path": path, "value": value})
+                    print(show(line))
+                else:
+                    print(f"{local(entry['wall'])}  {who(entry)}  {path} = {show(value)}")
             previous = value
     else:
         print(__doc__)

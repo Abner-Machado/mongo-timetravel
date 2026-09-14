@@ -87,6 +87,21 @@ $ python timetravel.py ... shop.orders 6aa5da2d7307e9debdcbc0ce field status
 2026-09-12 20:03:10.058  delete  session 9a35abeb  txn 7  status = null
 ```
 
+## Machine output
+
+`history` and `field` take `--json` and print one Extended JSON object per write, one
+per line. Each line carries `wall`, `op`, `session`, `txn` and a `changes` list of
+`{path, old, new}` (`old` missing on a new field, `new` missing on a removed one).
+Pipe it through `jq`, or `mongoimport` it into an audit collection you did not have.
+
+```
+$ python timetravel.py ... shop.orders 6aa5da2d7307e9debdcbc0ce history --json | jq -c '.changes[] | select(.path == "total")'
+{"path": "total", "new": 10.0}
+{"path": "total", "old": 10.0, "new": 30.0}
+{"path": "total", "old": 30.0, "new": 35.5}
+{"path": "total", "old": 35.5, "new": 0.0}
+```
+
 ## Oplog replay
 
 1. Query `local.oplog.rs` for `ns` plus `o._id` or `o2._id` equal to the id, in natural
