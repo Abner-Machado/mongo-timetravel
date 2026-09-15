@@ -309,6 +309,11 @@ def who(entry):
     return "  ".join(parts)
 
 
+# What each command expects after the id. Checked before connecting, so a typo
+# fails in milliseconds instead of after a server selection timeout.
+ARGS = {"history": (), "at": ("TIME",), "diff": ("START", "END"), "field": ("PATH",)}
+
+
 def main(argv):
     if len(argv) < 4:
         print(__doc__)
@@ -316,12 +321,25 @@ def main(argv):
     since = None
     if "--since" in argv:
         at = argv.index("--since")
+        if at + 1 >= len(argv):
+            print("--since needs a time, for example --since \"2026-09-01\"")
+            return 2
         since = parse_time(argv[at + 1])
         argv = argv[:at] + argv[at + 2:]
     as_json = "--json" in argv
     argv = [a for a in argv if a != "--json"]
+    if len(argv) < 4:
+        print(__doc__)
+        return 2
     uri, ns, doc_id, command = argv[0], argv[1], parse_id(argv[2]), argv[3]
     args = argv[4:]
+    wanted = ARGS.get(command)
+    if wanted is None:
+        print(__doc__)
+        return 2
+    if len(args) != len(wanted):
+        print(f"{command} takes {' '.join(wanted) or 'no arguments'}, got {len(args)}")
+        return 2
     client = MongoClient(uri)
     timeline = Timeline(client, ns, doc_id, since)
 

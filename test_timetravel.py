@@ -3,6 +3,8 @@
     python -m unittest test_timetravel
 """
 
+import contextlib
+import io
 import unittest
 from datetime import datetime
 
@@ -106,6 +108,46 @@ class Ids(unittest.TestCase):
         self.assertEqual(str(tt.parse_id("6aa5da2d7307e9debdcbc0ce")), "6aa5da2d7307e9debdcbc0ce")
         self.assertEqual(tt.parse_id("42"), 42)
         self.assertEqual(tt.parse_id("order-42"), "order-42")
+
+
+class Usage(unittest.TestCase):
+    """Bad command lines must fail before any connection attempt."""
+
+    def run_main(self, *args):
+        # Any attempt to connect would call MongoClient; make that loud.
+        real = tt.MongoClient
+        tt.MongoClient = lambda *a, **k: self.fail("connected with a bad command line")
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                code = tt.main(["mongodb://x", "db.c", "1", *args])
+        finally:
+            tt.MongoClient = real
+        return code, out.getvalue()
+
+    def test_missing_time_for_at(self):
+        code, out = self.run_main("at")
+        self.assertEqual(code, 2)
+        self.assertIn("at takes TIME", out)
+
+    def test_diff_with_one_time(self):
+        code, out = self.run_main("diff", "2026-01-01")
+        self.assertEqual(code, 2)
+        self.assertIn("diff takes START END", out)
+
+    def test_field_without_path(self):
+        code, _ = self.run_main("field")
+        self.assertEqual(code, 2)
+
+    def test_since_without_value(self):
+        code, out = self.run_main("history", "--since")
+        self.assertEqual(code, 2)
+        self.assertIn("--since needs a time", out)
+
+    def test_unknown_command(self):
+        code, out = self.run_main("undo")
+        self.assertEqual(code, 2)
+        self.assertIn("Usage:", out)
 
 
 if __name__ == "__main__":
