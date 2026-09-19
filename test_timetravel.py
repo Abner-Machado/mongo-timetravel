@@ -150,5 +150,87 @@ class Usage(unittest.TestCase):
         self.assertIn("Usage:", out)
 
 
+class FakeOplog:
+    """Stands in for local.oplog.rs: keeps the entries and the last query."""
+
+    def __init__(self, entries):
+        self.entries = entries
+        self.query = None
+
+    def find(self, query):
+        self.query = query
+        return self
+
+    def sort(self, *_):
+        return iter(self.entries)
+
+    def find_one(self, sort=None):
+        return self.entries[0] if self.entries else None
+
+
+class FakeClient(dict):
+    def __init__(self, entries):
+        self.oplog = FakeOplog(entries)
+        super().__init__({"local": {"oplog.rs": self.oplog}})
+
+
+class Timelines(unittest.TestCase):
+    def timeline(self, entries, since=None):
+        return tt.Timeline(FakeClient(entries), "db.c", 1, since)
+
+    def test_at_is_inclusive_of_the_write_instant(self):
+        t1, t2 = datetime(2026, 1, 1, 10), datetime(2026, 1, 1, 11)
+        line = self.timeline([
+            entry("i", {"_id": 1, "v": "a"}, wall=t1),
+            entry("u", {"$v": 2, "diff": {"u": {"v": "b"}}}, {"_id": 1}, wall=t2),
+        ])
+        self.assertIsNone(line.at(datetime(2026, 1, 1, 9)))
+        self.assertEqual(line.at(t1)["v"], "a")
+        self.assertEqual(line.at(datetime(2026, 1, 1, 10, 30))["v"], "a")
+        self.assertEqual(line.at(t2)["v"], "b")
+        self.assertFalse(line.partial)
+
+    def test_partial_when_the_insert_fell_off_the_oplog(self):
+        line = self.timeline([
+            entry("u", {"$v": 2, "diff": {"u": {"v": "b"}}}, {"_id": 1}),
+        ])
+        self.assertTrue(line.partial)
+        self.assertEqual(line.states[0], {"_id": 1, "v": "b"})
+
+    def test_changes_pairs_each_write_with_its_before_state(self):
+        line = self.timeline([
+            entry("i", {"_id": 1, "v": "a"}),
+            entry("d", {"_id": 1}),
+        ])
+        pairs = [(before, after) for _, before, after in line.changes()]
+        self.assertEqual(pairs, [(None, {"_id": 1, "v": "a"}), ({"_id": 1, "v": "a"}, None)])
+
+    def test_transaction_ops_are_flattened_and_inherit_the_outer_time(self):
+        when = datetime(2026, 1, 1, 12)
+        outer = {"op": "c", "ns": "admin.$cmd", "wall": when, "ts": "outer-ts", "lsid": "s1",
+                 "o": {"applyOps": [
+                     {"op": "i", "ns": "db.c", "o": {"_id": 1, "v": "a"}},
+                     {"op": "i", "ns": "db.other", "o": {"_id": 1, "v": "x"}},   # other collection
+                     {"op": "u", "ns": "db.c", "o": {"$v": 2, "diff": {"u": {"v": "b"}}}, "o2": {"_id": 2}},  # other doc
+                 ]}}
+        line = self.timeline([outer])
+        self.assertEqual(len(line.entries), 1)
+        self.assertEqual(line.entries[0]["wall"], when)
+        self.assertEqual(line.entries[0]["ts"], "outer-ts")
+        self.assertEqual(line.entries[0]["lsid"], "s1")
+        self.assertEqual(line.at(when), {"_id": 1, "v": "a"})
+
+    def test_since_adds_a_ts_lower_bound_to_the_query(self):
+        client = FakeClient([])
+        tt.Timeline(client, "db.c", 1, since=datetime(2026, 1, 1, 0, 0, 0))
+        bound = client.oplog.query["ts"]["$gte"]
+        self.assertEqual(bound, tt.Timestamp(1767225600, 0))
+
+    def test_without_since_the_query_has_no_ts(self):
+        client = FakeClient([])
+        tt.Timeline(client, "db.c", 1)
+        self.assertNotIn("ts", client.oplog.query)
+
+
 if __name__ == "__main__":
     unittest.main()
