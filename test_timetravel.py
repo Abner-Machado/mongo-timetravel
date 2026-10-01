@@ -7,6 +7,7 @@ import contextlib
 import io
 import unittest
 from datetime import datetime
+from types import SimpleNamespace
 
 import timetravel as tt
 
@@ -230,6 +231,68 @@ class Timelines(unittest.TestCase):
         client = FakeClient([])
         tt.Timeline(client, "db.c", 1)
         self.assertNotIn("ts", client.oplog.query)
+
+
+class FlattenTests(unittest.TestCase):
+    def test_empty_doc_and_none(self):
+        self.assertEqual(tt.flatten({}), {})
+        self.assertEqual(tt.flatten(None), {})
+
+    def test_nested_and_lists_use_dotted_paths(self):
+        flat = tt.flatten({"a": {"b": 1}, "xs": [10, 20]})
+        self.assertEqual(flat["a.b"], 1)
+        self.assertEqual(flat["xs.0"], 10)
+        self.assertEqual(flat["xs.1"], 20)
+
+    def test_empty_container_is_kept_as_a_leaf(self):
+        # An empty dict/list is falsy, so it is recorded as a value, not recursed.
+        self.assertEqual(tt.flatten({"tags": [], "meta": {}}), {"tags": [], "meta": {}})
+
+
+class DiffTests(unittest.TestCase):
+    def test_both_absent(self):
+        self.assertEqual(tt.diff(None, None), ["  (does not exist)"])
+
+    def test_creation_lists_every_leaf_as_added(self):
+        lines = tt.diff(None, {"a": 1, "b": 2})
+        self.assertIn("  + a = 1", lines)
+        self.assertIn("  + b = 2", lines)
+
+    def test_deletion(self):
+        self.assertEqual(tt.diff({"a": 1}, None), ["  (deleted)"])
+
+    def test_no_change(self):
+        self.assertEqual(tt.diff({"a": 1}, {"a": 1}), ["  (no change)"])
+
+    def test_added_removed_and_changed(self):
+        lines = tt.diff({"a": 1, "b": 2}, {"a": 9, "c": 3})
+        self.assertIn("    a: 1 -> 9", lines)
+        self.assertIn("  - b  (was 2)", lines)
+        self.assertIn("  + c = 3", lines)
+
+
+class ParseTimeTests(unittest.TestCase):
+    def test_z_suffix_is_utc(self):
+        self.assertEqual(tt.parse_time("2026-01-02T03:04:05Z"), datetime(2026, 1, 2, 3, 4, 5))
+
+    def test_explicit_offset_converts_to_utc(self):
+        # 03:00-03:00 is 06:00 UTC; the result is tz-naive UTC.
+        got = tt.parse_time("2026-01-02T03:00:00-03:00")
+        self.assertEqual(got, datetime(2026, 1, 2, 6, 0, 0))
+        self.assertIsNone(got.tzinfo)
+
+
+class WhoTests(unittest.TestCase):
+    def test_bare_op_name(self):
+        self.assertEqual(tt.who({"op": "u"}), "update")
+
+    def test_session_is_truncated_to_eight_hex(self):
+        sid = SimpleNamespace(hex=lambda: "abcdef1234567890")
+        self.assertEqual(tt.who({"op": "i", "lsid": {"id": sid}}), "insert  session abcdef12")
+
+    def test_txn_number_appended(self):
+        line = tt.who({"op": "d", "txnNumber": 7})
+        self.assertEqual(line, "delete  txn 7")
 
 
 if __name__ == "__main__":
