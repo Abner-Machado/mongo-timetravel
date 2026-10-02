@@ -42,6 +42,20 @@ class ReplayV2(unittest.TestCase):
         tt.apply_v2_diff(doc, {"sitems": {"a": True, "l": 1}})
         self.assertEqual(doc["items"], [1])
 
+    def test_subdiff_of_unknown_field_is_skipped(self):
+        # Partial history: the insert fell off the oplog, so the first entry is an
+        # update whose sub-diff touches a field we never saw. It must not crash.
+        after = tt.apply(None, entry("u", {"$v": 2, "diff": {"saddr": {"u": {"city": "SP"}}}},
+                                     o2={"_id": 1}))
+        self.assertEqual(after, {"_id": 1})
+
+    def test_subdiff_of_unknown_array_element_is_skipped(self):
+        # Array grows to reach the index, so the element is a padding None whose
+        # prior value is unknown. A sub-diff of it must be skipped, not crash.
+        doc = {"_id": 1, "items": [{"q": 1}]}
+        tt.apply_v2_diff(doc, {"sitems": {"a": True, "s2": {"u": {"q": 9}}}})
+        self.assertEqual(doc["items"], [{"q": 1}, None, None])
+
 
 class ReplayV1(unittest.TestCase):
     def test_set_and_unset_with_dotted_paths(self):

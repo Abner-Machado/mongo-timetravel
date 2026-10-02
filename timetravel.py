@@ -121,7 +121,9 @@ def apply_v2_diff(target, diff):
                 target.append(None)
             if key[0] == "u":
                 target[index] = value
-            elif key[0] == "s":
+            elif key[0] == "s" and target[index] is not None:
+                # Sub-diff of an element we never saw inserted (partial history):
+                # its prior value is unknown, so there is nothing to recurse into.
                 apply_v2_diff(target[index], value)
         return
     for field, value in diff.get("i", {}).items():
@@ -131,7 +133,9 @@ def apply_v2_diff(target, diff):
     for field in diff.get("d", {}):
         target.pop(field, None)
     for key, value in diff.items():
-        if key[0] == "s" and len(key) > 1:
+        if key[0] == "s" and len(key) > 1 and key[1:] in target:
+            # Sub-diff of a field we never saw inserted (partial history): its
+            # prior value is unknown, so there is nothing to recurse into.
             apply_v2_diff(target[key[1:]], value)
 
 
